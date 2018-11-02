@@ -18,6 +18,7 @@ class EzSystemsEzPlatformGraphQLExtension extends Extension implements PrependEx
 {
     const SCHEMA_DIR = __DIR__ . '/../../../../../app/config/graphql/ezplatform';
     const DOMAIN_SCHEMA_FILE = self::SCHEMA_DIR . '/Domain.types.yml';
+    const DOMAIN_MUTATION_FILE = self::SCHEMA_DIR . '/DomainMutation.types.yml';
 
     /**
      * {@inheritdoc}
@@ -44,12 +45,20 @@ class EzSystemsEzPlatformGraphQLExtension extends Extension implements PrependEx
 
     private function getGraphQLConfig()
     {
-        $schemaFilePath = self::DOMAIN_SCHEMA_FILE;
+        $schema = [
+            'platform' => [
+                'query' => 'Platform',
+                'mutation' => 'PlatformMutation',
+                'resolver_maps' => ['BD\EzPlatformGraphQLBundle\GraphQL\Resolver\Map\UploadMap'],
+            ]
+        ];
 
-        if (!file_exists($schemaFilePath)) {
-            $schema['platform'] = ['query' => 'Platform'];
-        } else {
-            $schema['platform'] = ['query' => 'Domain'];
+        if (file_exists(self::DOMAIN_SCHEMA_FILE)) {
+            $schema['platform']['query'] = 'Domain';
+        }
+
+        if (file_exists(self::DOMAIN_MUTATION_FILE)) {
+            $schema['platform']['mutation'] = 'DomainContentMutation';
         }
 
         // Deprecated, use the default schema with the '_repository field instead.

@@ -7,20 +7,22 @@ namespace EzSystems\EzPlatformGraphQL\GraphQL\Resolver;
 
 use EzSystems\EzPlatformGraphQL\GraphQL\InputMapper\SearchQueryMapper;
 use EzSystems\EzPlatformGraphQL\GraphQL\Value\ContentFieldValue;
+use EzSystems\EzPlatformGraphQL\Exception\UnsupportedFieldTypeException;
 use eZ\Publish\API\Repository\LocationService;
-use eZ\Publish\API\Repository\Repository;
+use eZ\Publish\API\Repository;
+use eZ\Publish\API\Repository\Exceptions\ContentFieldValidationException;
 use eZ\Publish\Core\FieldType;
-use eZ\Publish\API\Repository\ContentService;
-use eZ\Publish\API\Repository\ContentTypeService;
-use eZ\Publish\API\Repository\SearchService;
 use eZ\Publish\API\Repository\Values\Content\Content;
 use eZ\Publish\API\Repository\Values\Content\ContentInfo;
 use eZ\Publish\API\Repository\Values\Content\Query;
 use eZ\Publish\API\Repository\Values\Content\Search\SearchHit;
 use eZ\Publish\API\Repository\Values\ContentType\ContentType;
+use eZ\Publish\Core\FieldType\RichText\Converter;
 use GraphQL\Error\UserError;
 use Overblog\GraphQLBundle\Definition\Argument;
+use Overblog\GraphQLBundle\Relay\Node\GlobalId;
 use Overblog\GraphQLBundle\Resolver\TypeResolver;
+use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\Serializer\NameConverter\CamelCaseToSnakeCaseNameConverter;
 
 class DomainContentResolver
@@ -36,24 +38,31 @@ class DomainContentResolver
     private $queryMapper;
 
     /**
-     * @var Repository
+     * @var Repository\Repository
      */
     private $repository;
 
+    /**
+     * @var Converter
+     */
+    private $richTextConverter;
+
     public function __construct(
-        Repository $repository,
+        Repository\Repository $repository,
         TypeResolver $typeResolver,
-        SearchQueryMapper $queryMapper)
+        SearchQueryMapper $queryMapper,
+        Converter $richTextConverter)
     {
         $this->repository = $repository;
         $this->typeResolver = $typeResolver;
         $this->queryMapper = $queryMapper;
+        $this->richTextConverter = $richTextConverter;
     }
 
     public function resolveDomainContentItems($contentTypeIdentifier, $query = null)
     {
         return array_map(
-            function (Content $content) {
+            function (Repository\Values\Content\Content $content) {
                 return $content->contentInfo;
             },
             $this->findContentItemsByTypeIdentifier($contentTypeIdentifier, $query)
@@ -104,7 +113,7 @@ class DomainContentResolver
         $searchResults = $this->getSearchService()->findContent($query);
 
         return array_map(
-            function (SearchHit $searchHit) {
+            function (Repository\Values\Content\Search\SearchHit $searchHit) {
                 return $searchHit->valueObject;
             },
             $searchResults->searchHits
@@ -116,7 +125,7 @@ class DomainContentResolver
         $searchResults = $this->getSearchService()->findContentInfo(new Query([]));
 
         return array_map(
-            function (SearchHit $searchHit) {
+            function (Repository\Values\Content\Search\SearchHit $searchHit) {
                 return $searchHit->valueObject;
             },
             $searchResults->searchHits
@@ -131,6 +140,152 @@ class DomainContentResolver
         );
 
         return isset($aliases[0]->path) ? $aliases[0]->path : null;
+    }
+
+    public function updateDomainContent($input, Argument $args, $language): Repository\Values\Content\ContentInfo
+    {
+        if (isset($args['id'])) {
+            $idArray = GlobalId::fromGlobalId($args['id']);
+            $contentId = $idArray['id'];
+        } elseif (isset($args['contentId'])) {
+            $contentId = $args['contentId'];
+        } else {
+            throw new UserError("One argument out of id or contentId is required");
+        }
+
+        try {
+            $contentInfo = $this->getContentService()->loadContentInfo($contentId);
+        } catch (Repository\Exceptions\NotFoundException $e) {
+            throw new UserError("Content with id $contentId could not be loaded");
+        } catch (Repository\Exceptions\UnauthorizedException $e) {
+            throw new UserError("You are not authorized to load this content");
+        }
+        try {
+            $contentType = $this->getContentTypeService()->loadContentType($contentInfo->contentTypeId);
+        } catch (Repository\Exceptions\NotFoundException $e) {
+            throw new UserError("Content type with id $contentInfo->contentTypeId could not be loaded");
+        }
+        $versionNo = $args['versionNo'] ?? null;
+
+        $contentUpdateStruct = $this->getContentService()->newContentUpdateStruct();
+
+        foreach ($contentType->getFieldDefinitions() as $fieldDefinition) {
+            if (isset($input[$fieldDefinition->identifier])) {
+                try {
+                    $contentUpdateStruct->setField(
+                        $fieldDefinition->identifier,
+                        $this->getInputFieldValue($input, $fieldDefinition),
+                        $language
+                    );
+                } catch (UnsupportedFieldTypeException $e) {
+                    continue;
+                }
+            }
+        }
+
+        if (!isset($versionNo)) {
+            try {
+                $versionInfo = $this->getContentService()->createContentDraft($contentInfo)->versionInfo;
+            } catch (Repository\Exceptions\UnauthorizedException $e) {
+                throw new UserError("You are not authorized to create a draft of this content");
+            }
+        } else {
+            try {
+                $versionInfo = $this->getContentService()->loadVersionInfo($contentInfo, $versionNo);
+            } catch (Repository\Exceptions\NotFoundException $e) {
+                throw new UserError("Version $versionNo was not found");
+            } catch (Repository\Exceptions\UnauthorizedException $e) {
+                throw new UserError("You are not authorized to load this version");
+            }
+            if ($versionInfo->status !== Repository\Values\Content\VersionInfo::STATUS_DRAFT) {
+                try {
+                    $versionInfo = $this->getContentService()->createContentDraft($contentInfo, $versionNo)->versionInfo;
+                } catch (Repository\Exceptions\UnauthorizedException $e) {
+                    throw new UserError("You are not authorized to create a draft from this version");
+                }
+            }
+        }
+
+        try {
+            $contentDraft = $this->getContentService()->updateContent($versionInfo, $contentUpdateStruct);
+        } catch (ContentFieldValidationException $e) {
+            throw new UserError("The given input did not validate: " . $e->getMessage());
+        } catch (Repository\Exceptions\ContentValidationException $e) {
+            throw new UserError("The given input did not validate: " . $e->getMessage());
+        } catch (Repository\Exceptions\UnauthorizedException $e) {
+            throw new UserError("You are not authorized to update this version");
+        }
+        try {
+            $this->getContentService()->publishVersion($contentDraft->versionInfo);
+        } catch (Repository\Exceptions\BadStateException $e) {
+            return [];
+        } catch (Repository\Exceptions\UnauthorizedException $e) {
+            throw new UserError("You are not authorized to publish this version");
+        }
+
+        return $this->getContentService()->loadContent($contentDraft->id)->contentInfo;
+    }
+
+    public function createDomainContent($input, $contentTypeIdentifier, $parentLocationId, $language)
+    {
+        $contentType = $this->getContentTypeService()->loadContentTypeByIdentifier($contentTypeIdentifier);
+
+        $contentCreateStruct = $this->getContentService()->newContentCreateStruct($contentType, $language);
+        foreach ($contentType->getFieldDefinitions() as $fieldDefinition) {
+            if (isset($input[$fieldDefinition->identifier])) {
+                $fieldValue = $this->getInputFieldValue($input, $fieldDefinition);
+                $contentCreateStruct->setField($fieldDefinition->identifier, $fieldValue, $language);
+            }
+        }
+
+        try {
+            $contentDraft = $this->getContentService()->createContent(
+                $contentCreateStruct,
+                [$this->getLocationService()->newLocationCreateStruct($parentLocationId)]
+            );
+        }
+        catch (ContentFieldValidationException $e) {
+            reset($e->getFieldErrors());
+            $fieldError = current($e->getFieldErrors());
+            $error = str_replace($fieldError['eng-GB'], array_keys($fieldError['values']), array_values($fieldError['values']));
+            throw new UserError($error);
+        }
+
+        $content = $this->getContentService()->publishVersion($contentDraft->versionInfo);
+
+        return $content->contentInfo;
+    }
+
+    public function deleteDomainContent(Argument $args)
+    {
+        $globalId = null;
+
+        if (isset($args['id'])) {
+            $globalId = $args['id'];
+            $idArray = GlobalId::fromGlobalId($args['id']);
+            $contentId = $idArray['id'];
+        } elseif (isset($args['contentId'])) {
+            $contentId = $args['contentId'];
+        } else {
+            throw new UserError("One argument out of id or contentId is required");
+        }
+
+        $contentInfo = $this->getContentService()->loadContentInfo($contentId);
+        if (!isset($globalId)) {
+            $globalId = GlobalId::toGlobalId(
+                $this->resolveDomainContentType($contentInfo),
+                $contentId
+            );
+        }
+        
+        // @todo check type of domain object
+
+        $this->getContentService()->deleteContent($contentInfo);
+
+        return [
+            'id' => $globalId,
+            'contentId' => $contentId,
+        ];
     }
 
     public function resolveDomainFieldValue($contentInfo, $fieldDefinitionIdentifier)
@@ -170,7 +325,7 @@ class DomainContentResolver
         }
     }
 
-    public function ResolveDomainContentType(ContentInfo $contentInfo)
+    public function resolveDomainContentType(Repository\Values\Content\ContentInfo $contentInfo)
     {
         static $contentTypesMap = [], $contentTypesLoadErrors = [];
 
@@ -186,7 +341,7 @@ class DomainContentResolver
         return $this->makeDomainContentTypeName($contentTypesMap[$contentInfo->contentTypeId]);
     }
 
-    private function makeDomainContentTypeName(ContentType $contentType)
+    private function makeDomainContentTypeName(Repository\Values\ContentType\ContentType $contentType)
     {
         $converter = new CamelCaseToSnakeCaseNameConverter(null, false);
 
@@ -196,6 +351,67 @@ class DomainContentResolver
     public function resolveContentName(ContentInfo $contentInfo)
     {
         return $this->repository->getContentService()->loadContentByContentInfo($contentInfo)->getName();
+    }
+
+    private function getInputFieldValue($input, Repository\Values\ContentType\FieldDefinition $fieldDefinition)
+    {
+        $supportedInputTypes = ['ezstring', 'ezimage', 'eztext', 'ezrichtext', 'ezauthor'];
+        if (!in_array($fieldDefinition->fieldTypeIdentifier, $supportedInputTypes)) {
+            throw new UnsupportedFieldTypeException($fieldDefinition->fieldTypeIdentifier, 'input');
+        }
+
+        if ($fieldDefinition->fieldTypeIdentifier === 'ezauthor') {
+            $authors = [];
+            foreach ($input[$fieldDefinition->identifier] as $authorInput) {
+                $authors[] = new FieldType\Author\Author($authorInput);
+            }
+            $fieldValue = new FieldType\Author\Value($authors);
+        } elseif ($fieldDefinition->fieldTypeIdentifier === 'ezimage') {
+            $fieldInput = $input[$fieldDefinition->identifier];
+
+            if (!$fieldInput['file'] instanceof UploadedFile) {
+                return null;
+            }
+            $file = $fieldInput['file'];
+            $fieldValue = new FieldType\Image\Value([
+                'alternativeText' => $fieldInput['alternativeText'] ?? '',
+                'fileName' => $file->getClientOriginalName(),
+                'inputUri' => $file->getPathname(),
+                'fileSize' => $file->getSize(),
+            ]);
+        } elseif ($fieldDefinition->fieldTypeIdentifier === 'ezrichtext') {
+            $format = $input[$fieldDefinition->identifier]['format'];
+            $input = $input[$fieldDefinition->identifier]['input'];
+
+            if ($format === 'html') {
+                $input = <<<HTML5EDIT
+<section xmlns="http://ez.no/namespaces/ezpublish5/xhtml5/edit">$input</section>
+HTML5EDIT;
+
+                $dom = new \DOMDocument();
+                $dom->loadXML($input);
+                $docbook = $this->richTextConverter->convert($dom);
+                $fieldValue = new FieldType\RichText\Value($docbook);
+            } elseif ($format === 'markdown') {
+                $parseDown = new \Parsedown();
+                $html = $parseDown->text($input);
+                $input = <<<HTML5EDIT
+<section xmlns="http://ez.no/namespaces/ezpublish5/xhtml5/edit">$html</section>
+HTML5EDIT;
+                $dom = new \DOMDocument();
+                $dom->loadXML($input);
+                $docbook = $this->richTextConverter->convert($dom);
+                $fieldValue = new FieldType\RichText\Value($docbook);
+            } elseif ($format === 'docbook') {
+                $fieldValue = new FieldType\RichText\Value($input);
+            } else {
+                throw new UserError("Unsupported richtext input format $format");
+            }
+        } else {
+            $fieldValue = $input[$fieldDefinition->identifier];
+        }
+
+        return $fieldValue;
     }
 
     /**

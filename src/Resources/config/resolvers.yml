@@ -46,8 +46,18 @@ services:
             - { name: overblog_graphql.resolver, alias: "DomainRelationFieldValue", method: "resolveDomainRelationFieldValue" }
             - { name: overblog_graphql.resolver, alias: "ContentName", method: "resolveContentName" }
             - { name: overblog_graphql.resolver, alias: "MainUrlAlias", method: "resolveMainUrlAlias" }
+            - { name: overblog_graphql.mutation, alias: "CreateDomainContent", method: "createDomainContent" }
+            - { name: overblog_graphql.mutation, alias: "DeleteDomainContent", method: "deleteDomainContent" }
+            - { name: overblog_graphql.mutation, alias: "UpdateDomainContent", method: "updateDomainContent" }
         arguments:
             $repository: "@ezpublish.siteaccessaware.repository"
+            $richTextConverter: '@ezpublish.fieldType.ezrichtext.converter.input.xhtml5'
+
+    BD\EzPlatformGraphQLBundle\GraphQL\Mutation\UploadFiles:
+        arguments:
+            $repository: '@ezpublish.siteaccessaware.repository'
+        tags:
+            - { name: overblog_graphql.mutation, alias: "UploadFiles", method: "uploadFiles" }
 
     EzSystems\EzPlatformGraphQL\GraphQL\Resolver\UserResolver:
         tags:
@@ -124,3 +134,5 @@ services:
     EzSystems\EzPlatformGraphQL\GraphQL\Resolver\SelectionFieldResolver:
         tags:
             - { name: overblog_graphql.resolver, alias: "SelectionFieldValue", method: "resolveSelectionFieldValue"}
+
+    BD\EzPlatformGraphQLBundle\GraphQL\Resolver\Map\UploadMap: ~
