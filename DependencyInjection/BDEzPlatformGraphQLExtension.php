@@ -17,6 +17,7 @@ use Symfony\Component\Yaml\Yaml;
 class BDEzPlatformGraphQLExtension extends Extension implements PrependExtensionInterface
 {
     const DOMAIN_SCHEMA_FILE = __DIR__. '/../../../../app/config/graphql/Domain.types.yml';
+    const DOMAIN_MUTATION_FILE = __DIR__. '/../../../../app/config/graphql/DomainMutation.types.yml';
 
     /**
      * {@inheritdoc}
@@ -43,12 +44,20 @@ class BDEzPlatformGraphQLExtension extends Extension implements PrependExtension
 
     private function getGraphQLConfig()
     {
-        $schemaFilePath = self::DOMAIN_SCHEMA_FILE;
+        $schema = [
+            'platform' => [
+                'query' => 'Platform',
+                'mutation' => 'PlatformMutation',
+                'resolver_maps' => ['BD\EzPlatformGraphQLBundle\GraphQL\Resolver\Map\UploadMap'],
+            ]
+        ];
 
-        if (!file_exists($schemaFilePath)) {
-            $schema['platform'] = ['query' => 'Platform'];
-        } else {
-            $schema['platform'] = ['query' => 'Domain'];
+        if (file_exists(self::DOMAIN_SCHEMA_FILE)) {
+            $schema['platform']['query'] = 'Domain';
+        }
+
+        if (file_exists(self::DOMAIN_MUTATION_FILE)) {
+            $schema['platform']['mutation'] = 'DomainContentMutation';
         }
 
         // Deprecated, use the default schema with the '_repository field instead.
