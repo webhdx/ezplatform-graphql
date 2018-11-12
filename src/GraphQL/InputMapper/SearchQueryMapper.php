@@ -9,6 +9,7 @@
 namespace EzSystems\EzPlatformGraphQL\GraphQL\InputMapper;
 
 use eZ\Publish\API\Repository\Values\Content\Query;
+use GraphQL\Error\UserError;
 use InvalidArgumentException;
 
 class SearchQueryMapper
@@ -29,21 +30,20 @@ class SearchQueryMapper
             $criteria[] = new Query\Criterion\FullText($inputArray['Text']);
         }
 
-        if (isset($inputArray['Field']))
-        {
-            if (isset($inputArray['Field']['target'])) {
-                $criteria[] = $this->mapInputToFieldCriterion($inputArray['Field']);
-            } else {
-                $criteria = array_merge(
-                    $criteria,
-                    array_map(
-                        function($input) {
-                            return $this->mapInputToFieldCriterion($input);
-                        },
-                        $inputArray['Field']
-                    )
-                );
-            }
+        if (isset($inputArray['Field'])) {
+            $inputArray['Fields'] = [$inputArray['Field']];
+        }
+
+        if (isset($inputArray['Fields'])) {
+            $criteria = array_merge(
+                $criteria,
+                array_map(
+                    function($input) {
+                        return $this->mapInputToFieldCriterion($input);
+                    },
+                    $inputArray['Fields']
+                )
+            );
         }
 
         $criteria = array_merge($criteria, $this->mapDateMetadata($inputArray, 'Modified'));

@@ -7,12 +7,8 @@ namespace EzSystems\EzPlatformGraphQL\GraphQL\Resolver;
 
 use EzSystems\EzPlatformGraphQL\GraphQL\InputMapper\SearchQueryMapper;
 use EzSystems\EzPlatformGraphQL\GraphQL\Value\ContentFieldValue;
-use eZ\Publish\API\Repository\LocationService;
 use eZ\Publish\API\Repository\Repository;
 use eZ\Publish\Core\FieldType;
-use eZ\Publish\API\Repository\ContentService;
-use eZ\Publish\API\Repository\ContentTypeService;
-use eZ\Publish\API\Repository\SearchService;
 use eZ\Publish\API\Repository\Values\Content\Content;
 use eZ\Publish\API\Repository\Values\Content\ContentInfo;
 use eZ\Publish\API\Repository\Values\Content\Query;
@@ -50,13 +46,13 @@ class DomainContentResolver
         $this->queryMapper = $queryMapper;
     }
 
-    public function resolveDomainContentItems($contentTypeIdentifier, $query = null)
+    public function resolveDomainContentItems($contentTypeIdentifier, $args = null)
     {
         return array_map(
             function (Content $content) {
                 return $content->contentInfo;
             },
-            $this->findContentItemsByTypeIdentifier($contentTypeIdentifier, $query)
+            $this->findContentItemsByTypeIdentifier($contentTypeIdentifier, $args)
         );
     }
 
@@ -93,11 +89,29 @@ class DomainContentResolver
      */
     private function findContentItemsByTypeIdentifier($contentTypeIdentifier, Argument $args): array
     {
-        $queryArg = $args['query'];
+        $contentType = $this->repository->getContentTypeService()->loadContentTypeByIdentifier($contentTypeIdentifier);
+        $fieldsArgument = [];
+        foreach ($args->getRawArguments() as $argument => $value) {
+            if (($fieldDefinition = $contentType->getFieldDefinition($argument)) === null) {
+                continue;
+            }
+
+            if (!$fieldDefinition->isSearchable) {
+                continue;
+            }
+
+            $fieldFilter = $this->buildFieldFilter($argument, $value);
+            if ($fieldFilter !== null) {
+                $fieldsArgument[] = $fieldFilter;
+            }
+        }
+
+        $queryArg = [];
         $queryArg['ContentTypeIdentifier'] = $contentTypeIdentifier;
         if (isset($args['sortBy'])) {
             $queryArg['sortBy'] = $args['sortBy'];
         }
+        $queryArg['Fields'] = $fieldsArgument;
         $args['query'] = $queryArg;
 
         $query = $this->queryMapper->mapInputToQuery($args['query']);
@@ -228,5 +242,46 @@ class DomainContentResolver
     private function getSearchService()
     {
         return $this->repository->getSearchService();
+    }
+
+    private function buildFieldFilter($fieldDefinitionIdentifier, $value)
+    {
+        if (is_array($value) && count($value) === 1) {
+            $value = $value[0];
+        }
+        $operator = 'eq';
+
+        // @todo if 3 items, and first item is 'between', use next two items as value
+        if (is_array($value)) {
+            $operator = 'in';
+        } else if (is_string($value)) {
+            if ($value[0] === '~') {
+                $operator = 'like';
+                $value = substr($value, 1);
+                if (strpos($value, '%') === false) {
+                    $value = "%$value%";
+                }
+            } elseif ($value[0] === '<') {
+                $value = substr($value, 1);
+                if ($value[0] === '=') {
+                    $operator = 'lte';
+                    $value = substr($value, 2);
+                } else {
+                    $operator = 'lt';
+                    $value = substr($value, 1);
+                }
+            } elseif ($value[0] === '<') {
+                $value = substr($value, 1);
+                if ($value[0] === '=') {
+                    $operator = 'gte';
+                    $value = substr($value, 2);
+                } else {
+                    $operator = 'gt';
+                    $value = substr($value, 1);
+                }
+            }
+        }
+
+        return ['target' => $fieldDefinitionIdentifier, $operator => trim($value)];
     }
 }
