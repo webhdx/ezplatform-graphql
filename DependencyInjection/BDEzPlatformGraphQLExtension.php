@@ -31,6 +31,7 @@ class BDEzPlatformGraphQLExtension extends Extension implements PrependExtension
         $loader->load('domain_content.yml');
         $loader->load('resolvers.yml');
         $loader->load('services.yml');
+        $loader->load('graphql.yml');
     }
 
     /**

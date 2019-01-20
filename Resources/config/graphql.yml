@@ -1,0 +1,14 @@
+services:
+    _defaults:
+        autoconfigure: true
+        autowire: true
+        public: false
+
+    BD\EzPlatformGraphQLBundle\GraphQL\DataLoader\:
+        resource: ../../GraphQL/DataLoader
+
+    BD\EzPlatformGraphQLBundle\GraphQL\DataLoader\ContentLoader: '@BD\EzPlatformGraphQLBundle\GraphQL\DataLoader\CachedContentLoader'
+
+    BD\EzPlatformGraphQLBundle\GraphQL\DataLoader\CachedContentLoader:
+        arguments:
+            - '@BD\EzPlatformGraphQLBundle\GraphQL\DataLoader\SearchContentLoader'

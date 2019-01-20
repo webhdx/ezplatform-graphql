@@ -5,6 +5,7 @@
  */
 namespace BD\EzPlatformGraphQLBundle\GraphQL\Resolver;
 
+use BD\EzPlatformGraphQLBundle\GraphQL\DataLoader\ContentLoader;
 use BD\EzPlatformGraphQLBundle\GraphQL\InputMapper\SearchQueryMapper;
 use BD\EzPlatformGraphQLBundle\GraphQL\Value\ContentFieldValue;
 use eZ\Publish\API\Repository\LocationService;
@@ -18,6 +19,7 @@ use eZ\Publish\API\Repository\Values\Content\ContentInfo;
 use eZ\Publish\API\Repository\Values\Content\Query;
 use eZ\Publish\API\Repository\Values\Content\Search\SearchHit;
 use eZ\Publish\API\Repository\Values\ContentType\ContentType;
+use eZ\Publish\Core\REST\Server\Input\Parser\Criterion\ContentId;
 use GraphQL\Error\UserError;
 use Overblog\GraphQLBundle\Definition\Argument;
 use Overblog\GraphQLBundle\Resolver\TypeResolver;
@@ -40,14 +42,21 @@ class DomainContentResolver
      */
     private $repository;
 
+    /**
+     * @var ContentLoader
+     */
+    private $contentLoader;
+
     public function __construct(
         Repository $repository,
         TypeResolver $typeResolver,
-        SearchQueryMapper $queryMapper)
+        SearchQueryMapper $queryMapper,
+        ContentLoader $contentLoader)
     {
         $this->repository = $repository;
         $this->typeResolver = $typeResolver;
         $this->queryMapper = $queryMapper;
+        $this->contentLoader = $contentLoader;
     }
 
     public function resolveDomainContentItems($contentTypeIdentifier, $query = null)
@@ -89,37 +98,17 @@ class DomainContentResolver
      * @param \Overblog\GraphQLBundle\Definition\Argument $args
      *
      * @return \eZ\Publish\API\Repository\Values\Content\Content[]
-     * @throws \eZ\Publish\API\Repository\Exceptions\InvalidArgumentException
      */
     private function findContentItemsByTypeIdentifier($contentTypeIdentifier, Argument $args): array
     {
-        $queryArg = $args['query'];
-        $queryArg['ContentTypeIdentifier'] = $contentTypeIdentifier;
+        $input = $args['query'];
+        $input['ContentTypeIdentifier'] = $contentTypeIdentifier;
         if (isset($args['sortBy'])) {
-            $queryArg['sortBy'] = $args['sortBy'];
+            $input['sortBy'] = $args['sortBy'];
         }
-        $args['query'] = $queryArg;
 
-        $query = $this->queryMapper->mapInputToQuery($args['query']);
-        $searchResults = $this->getSearchService()->findContent($query);
-
-        return array_map(
-            function (SearchHit $searchHit) {
-                return $searchHit->valueObject;
-            },
-            $searchResults->searchHits
-        );
-    }
-
-    public function resolveDomainSearch()
-    {
-        $searchResults = $this->getSearchService()->findContentInfo(new Query([]));
-
-        return array_map(
-            function (SearchHit $searchHit) {
-                return $searchHit->valueObject;
-            },
-            $searchResults->searchHits
+        return $this->contentLoader->find(
+            $this->queryMapper->mapInputToQuery($input)
         );
     }
 
@@ -135,7 +124,7 @@ class DomainContentResolver
 
     public function resolveDomainFieldValue($contentInfo, $fieldDefinitionIdentifier)
     {
-        $content = $this->getContentService()->loadContent($contentInfo->id);
+        $content = $this->contentLoader->findSingle(new Query\Criterion\ContentId($contentInfo->id));
 
         return new ContentFieldValue([
             'contentTypeId' => $contentInfo->contentTypeId,
@@ -147,7 +136,7 @@ class DomainContentResolver
 
     public function resolveDomainRelationFieldValue($contentInfo, $fieldDefinitionIdentifier, $multiple = false)
     {
-        $content = $this->getContentService()->loadContent($contentInfo->id);
+        $content = $this->contentLoader->findSingle(new Query\Criterion\ContentId($contentInfo->id));
         // @todo check content type
         $fieldValue = $content->getFieldValue($fieldDefinitionIdentifier);
 
@@ -156,16 +145,11 @@ class DomainContentResolver
         }
 
         if ($multiple) {
-            return array_map(
-                function ($contentId) {
-                    return $this->getContentService()->loadContentInfo($contentId);
-                },
-                $fieldValue->destinationContentIds
-            );
+            return $this->contentLoader->findSingle(new Query\Criterion\ContentId($fieldValue->destinationContentIds));
         } else {
             return
                 isset($fieldValue->destinationContentIds[0])
-                ? $this->getContentService()->loadContentInfo($fieldValue->destinationContentIds[0])
+                ? $this->contentLoader->findSingle(new Query\Criterion\ContentId($fieldValue->destinationContentIds[0]))
                 : null;
         }
     }
@@ -195,7 +179,7 @@ class DomainContentResolver
 
     public function resolveContentName(ContentInfo $contentInfo)
     {
-        return $this->repository->getContentService()->loadContentByContentInfo($contentInfo)->getName();
+        return $this->contentLoader->findSingle(new Query\Criterion\ContentId($contentInfo->id))->getName();
     }
 
     /**
@@ -220,13 +204,5 @@ class DomainContentResolver
     private function getContentTypeService()
     {
         return $this->repository->getContentTypeService();
-    }
-
-    /**
-     * @return \eZ\Publish\API\Repository\SearchService
-     */
-    private function getSearchService()
-    {
-        return $this->repository->getSearchService();
     }
 }
