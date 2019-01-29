@@ -62,14 +62,11 @@ class DomainContentResolver
 
     public function resolveDomainContentItems($contentTypeIdentifier, $args = null)
     {
-        $contentCount = $this->countContentOfType($contentTypeIdentifier);
-
-        $beforeOffset = ConnectionBuilder::getOffsetWithDefault($args['before'], $contentCount);
+        $beforeOffset = ConnectionBuilder::getOffsetWithDefault($args['before'], 10);
         $afterOffset = ConnectionBuilder::getOffsetWithDefault($args['after'], -1);
-        // echo "offset: $beforeOffset / $afterOffset\n";
 
         $startOffset = max($afterOffset, -1) + 1;
-        $endOffset = min($beforeOffset, $contentCount);
+        $endOffset = min($beforeOffset, 10);
 
         if (is_numeric($args['first'])) {
             $endOffset = min($endOffset, $startOffset + $args['first']);
