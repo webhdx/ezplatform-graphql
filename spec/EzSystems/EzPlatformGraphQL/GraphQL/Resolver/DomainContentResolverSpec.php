@@ -2,6 +2,7 @@
 
 namespace spec\EzSystems\EzPlatformGraphQL\GraphQL\Resolver;
 
+use eZ\Publish\SPI\Persistence\Content\Type\Handler as ContentTypeHandler;
 use EzSystems\EzPlatformGraphQL\GraphQL\InputMapper\SearchQueryMapper;
 use EzSystems\EzPlatformGraphQL\GraphQL\Resolver\DomainContentResolver;
 use eZ\Publish\API\Repository\Repository;
@@ -13,9 +14,10 @@ class DomainContentResolverSpec extends ObjectBehavior
     function let(
         Repository $repository,
         TypeResolver $typeResolver,
-        SearchQueryMapper $searchQueryMapper
+        SearchQueryMapper $searchQueryMapper,
+        ContentTypeHandler $contentTypeHandler
     ) {
-        $this->beConstructedWith($repository, $typeResolver, $searchQueryMapper);
+        $this->beConstructedWith($repository, $typeResolver, $searchQueryMapper, $contentTypeHandler);
     }
 
     function it_is_initializable()
