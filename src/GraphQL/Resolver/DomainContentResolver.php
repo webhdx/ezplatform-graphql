@@ -22,6 +22,7 @@ use eZ\Publish\SPI\Persistence\Content\Type\Handler as ContentTypeHandler;
 use GraphQL\Error\UserError;
 use Overblog\GraphQLBundle\Definition\Argument;
 use Overblog\GraphQLBundle\Relay\Connection\Output\ConnectionBuilder;
+use Overblog\GraphQLBundle\Relay\Connection\Paginator;
 use Overblog\GraphQLBundle\Resolver\TypeResolver;
 use Symfony\Component\Serializer\NameConverter\CamelCaseToSnakeCaseNameConverter;
 
@@ -62,45 +63,34 @@ class DomainContentResolver
 
     public function resolveDomainContentItems($contentTypeIdentifier, $args = null)
     {
-        $beforeOffset = ConnectionBuilder::getOffsetWithDefault($args['before'], 10);
-        $afterOffset = ConnectionBuilder::getOffsetWithDefault($args['after'], -1);
-
-        $startOffset = max($afterOffset, -1) + 1;
-        $endOffset = min($beforeOffset, 10);
-
-        if (is_numeric($args['first'])) {
-            $endOffset = min($endOffset, $startOffset + $args['first']);
-        }
-        if (is_numeric($args['last'])) {
-            $startOffset = max($startOffset, $endOffset - $args['last']);
-        }
-
         $query = $args['query'] ?: [];
         $query['ContentTypeIdentifier'] = $contentTypeIdentifier;
-        $query['offset'] = $limit = $offset = max($startOffset, 0);
-        $query['limit'] = $endOffset - $startOffset;
         $query['sortBy'] = $args['sortBy'];
-
         $query = $this->queryMapper->mapInputToQuery($query);
-        $searchResults = $this->repository->getSearchService()->findContentInfo($query);
-        $items = array_map(
-            function (SearchHit $searchHit) {
-                return $searchHit->valueObject;
-            },
-            $searchResults->searchHits
-        );
 
-        $connection = ConnectionBuilder::connectionFromArraySlice(
-            $items,
+        $paginator = new Paginator(function ($offset, $limit) use ($query) {
+            $query->offset = $offset;
+            $query->limit = $limit ?? 10;
+            $searchResults = $this->repository->getSearchService()->findContentInfo($query);
+
+            return array_map(
+                function (SearchHit $searchHit) {
+                    return $searchHit->valueObject;
+                },
+                $searchResults->searchHits
+            );
+        });
+
+        return $paginator->auto(
             $args,
-            [
-                'sliceStart' => $limit,
-                'arrayLength' => $searchResults->totalCount,
-            ]
-        );
-        $connection->sliceSize = count($items);
+            function() use ($query) {
+                $countQuery = clone $query;
+                $countQuery->limit = 0;
+                $countQuery->offset = 0;
 
-        return $connection;
+                return $this->repository->getSearchService()->findContentInfo($countQuery)->totalCount;
+            }
+        );
     }
 
     /**
