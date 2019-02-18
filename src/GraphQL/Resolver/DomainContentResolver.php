@@ -12,17 +12,14 @@ use eZ\Publish\API\Repository\Repository;
 use eZ\Publish\Core\FieldType;
 use eZ\Publish\API\Repository\ContentService;
 use eZ\Publish\API\Repository\ContentTypeService;
-use eZ\Publish\API\Repository\Exceptions\NotFoundException;
 use eZ\Publish\API\Repository\SearchService;
+use eZ\Publish\API\Repository\Values\Content\Content;
 use eZ\Publish\API\Repository\Values\Content\ContentInfo;
 use eZ\Publish\API\Repository\Values\Content\Query;
 use eZ\Publish\API\Repository\Values\Content\Search\SearchHit;
 use eZ\Publish\API\Repository\Values\ContentType\ContentType;
-use eZ\Publish\SPI\Persistence\Content\Type\Handler as ContentTypeHandler;
 use GraphQL\Error\UserError;
 use Overblog\GraphQLBundle\Definition\Argument;
-use Overblog\GraphQLBundle\Relay\Connection\Output\ConnectionBuilder;
-use Overblog\GraphQLBundle\Relay\Connection\Paginator;
 use Overblog\GraphQLBundle\Resolver\TypeResolver;
 use Symfony\Component\Serializer\NameConverter\CamelCaseToSnakeCaseNameConverter;
 
@@ -43,65 +40,28 @@ class DomainContentResolver
      */
     private $repository;
 
-    /**
-     * @var \eZ\Publish\SPI\Persistence\Content\Type\Handler
-     */
-    protected $contentTypeHandler;
-
     public function __construct(
         Repository $repository,
         TypeResolver $typeResolver,
-        SearchQueryMapper $queryMapper,
-        ContentTypeHandler $contentTypeHandler
-    )
+        SearchQueryMapper $queryMapper)
     {
         $this->repository = $repository;
         $this->typeResolver = $typeResolver;
         $this->queryMapper = $queryMapper;
-        $this->contentTypeHandler = $contentTypeHandler;
     }
 
-    public function resolveDomainContentItems($contentTypeIdentifier, $args = null)
+    public function resolveDomainContentItems($contentTypeIdentifier, $query = null)
     {
-        $query = $args['query'] ?: [];
-        $query['ContentTypeIdentifier'] = $contentTypeIdentifier;
-        $query['sortBy'] = $args['sortBy'];
-        $query = $this->queryMapper->mapInputToQuery($query);
-
-        $paginator = new Paginator(function ($offset, $limit) use ($query) {
-            $query->offset = $offset;
-            $query->limit = $limit ?? 10;
-            $searchResults = $this->repository->getSearchService()->findContentInfo($query);
-
-            return array_map(
-                function (SearchHit $searchHit) {
-                    return $searchHit->valueObject;
-                },
-                $searchResults->searchHits
-            );
-        });
-
-        return $paginator->auto(
-            $args,
-            function() use ($query) {
-                $countQuery = clone $query;
-                $countQuery->limit = 0;
-                $countQuery->offset = 0;
-
-                return $this->repository->getSearchService()->findContentInfo($countQuery)->totalCount;
-            }
+        return array_map(
+            function (Content $content) {
+                return $content->contentInfo;
+            },
+            $this->findContentItemsByTypeIdentifier($contentTypeIdentifier, $query)
         );
     }
 
     /**
      * Resolves a domain content item by id, and checks that it is of the requested type.
-     * @param int|string $contentId
-     * @param String $contentTypeIdentifier
-     *
-     * @return ContentInfo
-     *
-     * @throws \eZ\Publish\API\Repository\Exceptions\NotFoundException
-     * @throws \eZ\Publish\API\Repository\Exceptions\UnauthorizedException
      */
     public function resolveDomainContentItem(Argument $args, $contentTypeIdentifier)
     {
@@ -268,16 +228,5 @@ class DomainContentResolver
     private function getSearchService()
     {
         return $this->repository->getSearchService();
-    }
-
-    private function countContentOfType($contentTypeIdentifier): int
-    {
-        try {
-            return $this->contentTypeHandler->getContentCount(
-                $this->repository->getContentTypeService()->loadContentTypeByIdentifier($contentTypeIdentifier)->id
-            );
-        } catch (NotFoundException $e) {
-            return 0;
-        }
     }
 }

@@ -21,7 +21,7 @@ class AddDomainContentCollectionToDomainGroup extends BaseWorker implements Work
             [
                 'description' => isset($descriptions['eng-GB']) ? $descriptions['eng-GB'] : 'No description available',
                 'resolve' => sprintf(
-                    '@=resolver("DomainContentItemsByTypeIdentifier", ["%s", args])',
+                    '@=resolver("SearchContentOfTypeAsConnection", ["%s", args])',
                     $contentType->identifier
                 ),
                 'argsBuilder' => 'Relay::Connection',
